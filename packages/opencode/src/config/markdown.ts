@@ -4,6 +4,7 @@ import { ConfigMarkdown as ConfigMarkdownCore } from "@opencode-ai/core/config/m
 
 export const FILE_REGEX = /(?<![\w`])@(\.?[^\s`,.]*(?:\.[^\s`,.]+)*)/g
 export const SHELL_REGEX = /!`([^`]+)`/g
+export const FORCED_TOOL_REGEX = /<!--\s*opencode-force-tool:\s*([a-zA-Z0-9_-]+)\s*-->/i
 
 export function files(template: string) {
   return Array.from(template.matchAll(FILE_REGEX))
@@ -11,6 +12,18 @@ export function files(template: string) {
 
 export function shell(template: string) {
   return Array.from(template.matchAll(SHELL_REGEX))
+}
+
+export function forcedTool(template: string) {
+  return template.match(FORCED_TOOL_REGEX)?.[1]
+}
+
+export function withoutForcedTool(template: string) {
+  return template.replace(FORCED_TOOL_REGEX, "")
+}
+
+export function trustedForcedTool(template: string) {
+  return { tool: forcedTool(template), template: withoutForcedTool(template) }
 }
 
 // other coding agents like claude code allow invalid yaml in their

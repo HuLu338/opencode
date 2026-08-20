@@ -1,0 +1,5 @@
+Run one bounded cost-aware coding workflow as a single deterministic operation.
+
+Provide the original request, routing attributes, exact allowed files, and the smallest deterministic validation commands. The tool owns `.opencode/task-state/<task_id>.json`, delegates implementation to the routed coding role, records actual session usage, runs the supplied validation commands, retries or escalates within policy, and obtains an independent Reviewer decision from a different provider/model.
+
+Use `resume: true` only to continue an existing task state after an interrupted tool call. Never run this tool concurrently for the same task ID. The final output is authoritative: `completed` requires deterministic validation, different concrete author and Reviewer identities, and an explicit Reviewer `PASS`.

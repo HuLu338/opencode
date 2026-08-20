@@ -100,6 +100,33 @@ afterEach(async () => {
 })
 
 describe("tool.registry", () => {
+  it.instance("exposes deterministic task routing", () =>
+    Effect.gen(function* () {
+      const registry = yield* ToolRegistry.Service
+      const ids = yield* registry.ids()
+
+      expect(ids).toContain("route_task")
+    }),
+  )
+
+  it.instance("exposes persisted task validation state", () =>
+    Effect.gen(function* () {
+      const registry = yield* ToolRegistry.Service
+      const ids = yield* registry.ids()
+
+      expect(ids).toContain("task_state")
+    }),
+  )
+
+  it.instance("exposes deterministic Phase 5 orchestration", () =>
+    Effect.gen(function* () {
+      const registry = yield* ToolRegistry.Service
+      const ids = yield* registry.ids()
+
+      expect(ids).toContain("orchestrate_task")
+    }),
+  )
+
   it.instance("does not expose task_status", () =>
     Effect.gen(function* () {
       const registry = yield* ToolRegistry.Service

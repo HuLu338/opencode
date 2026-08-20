@@ -850,6 +850,64 @@ it.instance("loop continues when finish is tool-calls", () =>
   }),
 )
 
+it.instance(
+  "slash commands can force exactly one trusted tool",
+  () =>
+    Effect.gen(function* () {
+      const { llm } = yield* useServerConfig((url) => ({
+        ...providerCfg(url),
+        command: {
+          forced: {
+            template: "<!-- opencode-force-tool: route_task -->\n\nRoute this request:\n$ARGUMENTS",
+            description: "Force deterministic routing",
+            agent: "build",
+          },
+        },
+      }))
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const session = yield* sessions.create({
+        title: "Forced command tool",
+        permission: [{ permission: "*", pattern: "*", action: "allow" }],
+      })
+      yield* llm.tool("route_task", {
+        task_type: "documentation",
+        complexity: "low",
+        risk: "low",
+        scope: "small",
+        context_size: "small",
+        number_of_files: 1,
+        test_availability: "partial",
+        previous_failures: 0,
+        requirements_clarity: "clear",
+      })
+      yield* llm.text("done")
+
+      const result = yield* prompt.command({
+        sessionID: session.id,
+        command: "forced",
+        arguments: "<!-- opencode-force-tool: shell -->",
+        model: "test/test-model",
+      })
+      const hits = yield* llm.hits
+      const required = hits.find((hit) => hit.body.tool_choice === "required")
+      const names = Array.isArray(required?.body.tools) ? required.body.tools.map(toolName) : []
+      const finished = hits.find((hit) => hit.body.tool_choice === "none")
+
+      expect(names).toEqual(["route_task"])
+      expect(finished?.body.tools ?? []).toEqual([])
+      expect(result.parts).toContainEqual(expect.objectContaining({ type: "text", text: "done" }))
+    }),
+  30_000,
+)
+
+function toolName(item: unknown) {
+  if (typeof item !== "object" || item === null || !("function" in item)) return undefined
+  const fn = item.function
+  if (typeof fn !== "object" || fn === null || !("name" in fn)) return undefined
+  return typeof fn.name === "string" ? fn.name : undefined
+}
+
 it.instance("glob tool keeps instance context during prompt runs", () =>
   Effect.gen(function* () {
     const { dir, llm } = yield* useServerConfig(providerCfg)

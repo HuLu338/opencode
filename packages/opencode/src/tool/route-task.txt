@@ -1,0 +1,7 @@
+Classify a coding task with deterministic, provider-independent routing rules.
+
+Call this tool after inspecting enough repository context to estimate the requested attributes. Use evidence from the request, affected modules, contracts, tests, and prior failures. Do not use model confidence as an input.
+
+The result names an agent role, never a model. Delegate to the returned role exactly. `review_required` is an advisory signal in this phase; report it to the user, but do not start an automatic review loop.
+
+This tool only returns a routing decision. It does not invoke an agent, run validation, retry work, or spend a task budget.

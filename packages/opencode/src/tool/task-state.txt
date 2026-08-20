@@ -1,0 +1,19 @@
+Persist and advance the deterministic state of one cost-aware coding task.
+
+Use `start` once after `route_task` and before delegating implementation. The task ID defaults to the current session ID; use a stable ID such as `AUTH-014` when the task must be resumed from another session. State is stored locally in `.opencode/task-state/<task_id>.json` and is ignored by Git.
+
+Use `record_validation` only after running real deterministic checks yourself. Every check must include its exact command and a status of `passed`, `failed`, or `unavailable`:
+
+- A failed check records an implementation attempt and deterministically chooses a retry, escalation to `strong-coder`, or a blocked state.
+- All passed checks move the task to `ready_for_review`.
+- An unavailable check without a failure leaves the task in `needs_validation`; it never counts as success.
+
+After every delegated task completes, call `record_usage` with the child session ID returned by the `task` tool and its assigned role. OpenCode reads the provider, model, token usage, cache usage, and estimated USD cost from its own persisted session record. Re-recording the same session updates its cumulative snapshot instead of counting it twice, which makes same-role retries accurate.
+
+The output of every action includes a task summary: routing decision, attempt and escalation counts, per-role/provider/model usage, total tokens, estimated USD cost, and remaining budget when `max_cost_usd` is configured. Exceeding the configured cost budget blocks later retries or escalations; it cannot retroactively cancel the already-completed model call that crossed the limit.
+
+When deterministic validation passes, call `prepare_review` before delegating the Reviewer. It derives the final coding author's concrete provider/model from recorded child-session usage and compares it with the configured Reviewer model. It starts a review only when those identities differ. If either identity is unavailable or both identities match, it records `review.status: "unavailable"`; do not treat that task as independently reviewed.
+
+After the Reviewer child session ends, first call `record_usage` with role `reviewer`, then call `record_review` with that same session ID and its explicit `passed` or `changes_requested` decision. A passed independent review moves the task to `completed`. Requested changes return the task to `retrying` while its normal implementation-attempt budget remains; otherwise the task is blocked. The persisted review history records completed review cycles and unavailable-review reasons.
+
+Never report a model's self-review as a passed check. Use `read` to resume a task or inspect its persisted state. Do not overwrite or delete task state files manually.

@@ -10,6 +10,9 @@ import { GlobTool } from "./glob"
 import { GrepTool } from "./grep"
 import { ReadTool } from "./read"
 import { TaskTool } from "./task"
+import { RouteTaskTool } from "./route-task"
+import { TaskStateTool } from "./task-state"
+import { OrchestrateTaskTool } from "./orchestrate-task"
 import { Database } from "@opencode-ai/core/database/database"
 import { TodoWriteTool } from "./todo"
 import { WebFetchTool } from "./webfetch"
@@ -33,7 +36,6 @@ import { Glob } from "@opencode-ai/core/util/glob"
 import path from "path"
 import { pathToFileURL } from "url"
 import { Effect, Layer, Context } from "effect"
-import { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
 import { Format } from "../format"
 import { InstanceState } from "@/effect/instance-state"
@@ -95,6 +97,9 @@ const layer = Layer.effect(
 
     const invalid = yield* InvalidTool
     const task = yield* TaskTool
+    const route = yield* RouteTaskTool
+    const taskState = yield* TaskStateTool
+    const orchestrateTask = yield* OrchestrateTaskTool
     const read = yield* ReadTool
     const question = yield* QuestionTool
     const todo = yield* TodoWriteTool
@@ -210,6 +215,9 @@ const layer = Layer.effect(
           edit: Tool.init(edit),
           write: Tool.init(writetool),
           task: Tool.init(task),
+          route: Tool.init(route),
+          taskState: Tool.init(taskState),
+          orchestrateTask: Tool.init(orchestrateTask),
           fetch: Tool.init(webfetch),
           todo: Tool.init(todo),
           search: Tool.init(websearch),
@@ -233,6 +241,9 @@ const layer = Layer.effect(
             tool.edit,
             tool.write,
             tool.task,
+            tool.route,
+            tool.taskState,
+            tool.orchestrateTask,
             tool.fetch,
             tool.todo,
             tool.search,
@@ -406,10 +417,9 @@ function normalizeZodJsonSchema(value: unknown): unknown {
   if (typeof value !== "object" || value === null) return value
   return Object.fromEntries(
     Object.entries(value)
-      .filter((entry) =>
-        (entry[0] === "exclusiveMaximum" || entry[0] === "exclusiveMinimum") && typeof entry[1] === "boolean"
-          ? false
-          : true,
+      .filter(
+        (entry) =>
+          !((entry[0] === "exclusiveMaximum" || entry[0] === "exclusiveMinimum") && typeof entry[1] === "boolean"),
       )
       .map(([key, item]) => [key, normalizeZodJsonSchema(item)]),
   )

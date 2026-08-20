@@ -16,6 +16,7 @@ import { ConfigPluginV1 } from "./plugin"
 import { ConfigProviderV1 } from "./provider"
 import { ConfigServerV1 } from "./server"
 import { ConfigSkillsV1 } from "./skills"
+import { TaskRouter } from "../../task-router"
 
 export type Layout = ConfigLayoutV1.Layout
 
@@ -145,6 +146,9 @@ export const Info = Schema.Struct({
   ).annotate({
     description:
       "Thresholds for truncating tool output. When output exceeds either limit, the full text is written to the truncation directory and a preview is returned.",
+  }),
+  cost_aware: Schema.optional(TaskRouter.PolicyConfig).annotate({
+    description: "Retry and escalation limits for cost-aware coding task orchestration",
   }),
   compaction: Schema.optional(
     Schema.Struct({
