@@ -1,0 +1,1 @@
+desktop orchestration smoke passed
