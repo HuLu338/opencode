@@ -36,6 +36,19 @@ export type RequirementsClarity = typeof RequirementsClarity.Type
 export const Role = Schema.Literals(["architect", "cheap-coder", "strong-coder", "reviewer"])
 export type Role = typeof Role.Type
 
+export const ModelReference = Schema.String.check(Schema.isPattern(/^[^/\s]+\/.+$/))
+export type ModelReference = typeof ModelReference.Type
+
+const ModelPool = Schema.NonEmptyArray(ModelReference)
+
+export const ModelPools = Schema.Struct({
+  architect: Schema.optional(ModelPool),
+  "cheap-coder": Schema.optional(ModelPool),
+  "strong-coder": Schema.optional(ModelPool),
+  reviewer: Schema.optional(ModelPool),
+})
+export type ModelPools = typeof ModelPools.Type
+
 export const TaskID = Schema.String.check(Schema.isPattern(/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/))
 export type TaskID = typeof TaskID.Type
 
@@ -97,6 +110,35 @@ export const PolicyConfig = Schema.Struct({
 })
 export type PolicyConfig = typeof PolicyConfig.Type
 
+const PricePerMillion = Schema.Finite.check(Schema.isGreaterThanOrEqualTo(0))
+
+export const ModelPricing = Schema.Struct({
+  input: PricePerMillion,
+  output: PricePerMillion,
+  reasoning: Schema.optional(PricePerMillion),
+  cache_read: Schema.optional(PricePerMillion),
+  cache_write: Schema.optional(PricePerMillion),
+})
+export type ModelPricing = typeof ModelPricing.Type
+
+export const SandboxConfig = Schema.Struct({
+  enabled: Schema.optional(Schema.Boolean),
+  image: Schema.optional(Schema.String),
+  network: Schema.optional(Schema.Literals(["none", "bridge"])),
+  cpus: Schema.optional(Schema.Finite.check(Schema.isGreaterThan(0))),
+  memory_mb: Schema.optional(PositiveInt),
+  pids_limit: Schema.optional(PositiveInt),
+})
+export type SandboxConfig = typeof SandboxConfig.Type
+
+export const CostAwareConfig = Schema.Struct({
+  ...PolicyConfig.fields,
+  model_pools: Schema.optional(ModelPools),
+  pricing_usd_per_million: Schema.optional(Schema.Record(Schema.String, ModelPricing)),
+  sandbox: Schema.optional(SandboxConfig),
+})
+export type CostAwareConfig = typeof CostAwareConfig.Type
+
 export const DEFAULT_POLICY: Policy = {
   max_attempts: 3,
   max_escalations: 1,
@@ -111,11 +153,18 @@ export const ValidationCheck = Schema.Struct({
   name: Schema.String.annotate({ description: "What was validated, such as focused tests or typecheck" }),
   command: Schema.String.annotate({ description: "The exact command that was run" }),
   status: CheckStatus,
+  executor: Schema.optional(Schema.Literals(["host", "docker"])),
   summary: Schema.optional(Schema.String).annotate({ description: "Short outcome or failure summary" }),
 })
 export type ValidationCheck = typeof ValidationCheck.Type
 
 const CurrencyAmount = Schema.Finite.check(Schema.isGreaterThanOrEqualTo(0))
+
+export const CostStatus = Schema.Literals(["estimated", "unavailable"])
+export type CostStatus = typeof CostStatus.Type
+
+export const CostSource = Schema.Literals(["configured", "provider", "unavailable"])
+export type CostSource = typeof CostSource.Type
 
 export const SessionUsage = Schema.Struct({
   session_id: Schema.String,
@@ -128,8 +177,34 @@ export const SessionUsage = Schema.Struct({
   cache_read_tokens: NonNegativeInt,
   cache_write_tokens: NonNegativeInt,
   estimated_cost_usd: CurrencyAmount,
+  cost_status: CostStatus.pipe(Schema.withDecodingDefault(Effect.succeed("unavailable" as const))),
+  cost_source: CostSource.pipe(Schema.withDecodingDefault(Effect.succeed("unavailable" as const))),
 })
 export type SessionUsage = typeof SessionUsage.Type
+export type SessionUsageInput = Omit<SessionUsage, "cost_status" | "cost_source"> &
+  Partial<Pick<SessionUsage, "cost_status" | "cost_source">>
+
+export const ModelFailureCategory = Schema.Literals([
+  "authentication",
+  "rate_limit",
+  "quota",
+  "model_unavailable",
+  "timeout",
+  "network",
+  "provider_error",
+  "invalid_request",
+  "unknown",
+])
+export type ModelFailureCategory = typeof ModelFailureCategory.Type
+
+export const ModelFailure = Schema.Struct({
+  role: Role,
+  provider: Schema.String,
+  model: Schema.String,
+  category: ModelFailureCategory,
+  summary: Schema.String,
+})
+export type ModelFailure = typeof ModelFailure.Type
 
 export const ModelIdentity = Schema.Struct({
   provider: Schema.String,
@@ -151,6 +226,9 @@ export const ReviewUnavailableReason = Schema.Literals([
   "reviewer_model_unconfigured",
   "reviewer_model_unknown",
   "reviewer_matches_author",
+  "reviewer_model_pool_exhausted",
+  "cost_budget_exceeded",
+  "cost_budget_unavailable",
 ])
 export type ReviewUnavailableReason = typeof ReviewUnavailableReason.Type
 
@@ -199,6 +277,9 @@ export const TransitionReason = Schema.Literals([
   "review_changes_requested",
   "review_attempt_limit_reached",
   "review_unavailable",
+  "model_pool_exhausted",
+  "model_execution_failed",
+  "cost_unavailable",
 ])
 export type TransitionReason = typeof TransitionReason.Type
 
@@ -211,6 +292,7 @@ export const State = Schema.Struct({
   assigned_role: Role,
   attempts: Schema.Array(Attempt),
   usage: Schema.Array(SessionUsage).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
+  model_failures: Schema.Array(ModelFailure).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
   review: Review.pipe(Schema.withDecodingDefault(Effect.succeed(DEFAULT_REVIEW))),
   review_history: Schema.Array(Review).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
   escalations: NonNegativeInt,
@@ -244,6 +326,9 @@ export type CostSummary = {
   max_cost_usd?: number
   estimated_cost_usd: number
   remaining_cost_usd?: number
+  cost_status: "estimated" | "partial" | "unavailable"
+  budget_status: "not_configured" | "enforced" | "unavailable"
+  model_failures: ModelFailure[]
   tokens: {
     input: number
     output: number
@@ -257,6 +342,7 @@ export type CostSummary = {
     model: string
     sessions: number
     estimated_cost_usd: number
+    cost_status: "estimated" | "partial" | "unavailable"
     input_tokens: number
     output_tokens: number
     reasoning_tokens: number
@@ -266,7 +352,61 @@ export type CostSummary = {
 }
 
 export function resolvePolicy(input?: PolicyConfig): Policy {
-  return { ...DEFAULT_POLICY, ...input }
+  return {
+    max_attempts: input?.max_attempts ?? DEFAULT_POLICY.max_attempts,
+    max_escalations: input?.max_escalations ?? DEFAULT_POLICY.max_escalations,
+    ...(input?.max_cost_usd === undefined ? {} : { max_cost_usd: input.max_cost_usd }),
+    cheap_coder_failures_before_escalation:
+      input?.cheap_coder_failures_before_escalation ?? DEFAULT_POLICY.cheap_coder_failures_before_escalation,
+    strong_coder_failures_before_human:
+      input?.strong_coder_failures_before_human ?? DEFAULT_POLICY.strong_coder_failures_before_human,
+  }
+}
+
+export function resolveModelPool(input: CostAwareConfig | undefined, role: Role, primary?: string) {
+  return [...new Set([...(primary ? [primary] : []), ...(input?.model_pools?.[role] ?? [])])]
+}
+
+export function estimateCost(
+  tokens: Pick<
+    SessionUsage,
+    "input_tokens" | "output_tokens" | "reasoning_tokens" | "cache_read_tokens" | "cache_write_tokens"
+  >,
+  pricing: ModelPricing,
+) {
+  return (
+    (tokens.input_tokens * pricing.input +
+      tokens.output_tokens * pricing.output +
+      tokens.reasoning_tokens * (pricing.reasoning ?? pricing.output) +
+      tokens.cache_read_tokens * (pricing.cache_read ?? pricing.input) +
+      tokens.cache_write_tokens * (pricing.cache_write ?? pricing.input)) /
+    1_000_000
+  )
+}
+
+export function classifyModelFailure(error: string): ModelFailureCategory {
+  const text = error.toLowerCase()
+  if (/\b401\b|unauthori[sz]ed|api key.*missing|credential|oauth|token refresh|authentication/.test(text)) {
+    return "authentication"
+  }
+  if (/\b429\b|rate.?limit|too many requests/.test(text)) return "rate_limit"
+  if (/credit|quota|billing|insufficient funds|can only afford|payment required/.test(text)) return "quota"
+  if (/model.*not found|unknown model|no endpoints found|model.*unavailable|unsupported model/.test(text)) {
+    return "model_unavailable"
+  }
+  if (/timed? out|timeout|deadline exceeded/.test(text)) return "timeout"
+  if (/econn|enotfound|connection (?:reset|refused)|fetch failed|network error|socket hang up/.test(text)) {
+    return "network"
+  }
+  if (/\b50[0-4]\b|service unavailable|bad gateway|provider.*overloaded|internal server error/.test(text)) {
+    return "provider_error"
+  }
+  if (/\b400\b|invalid request|invalid.*schema|tool.*unsupported/.test(text)) return "invalid_request"
+  return "unknown"
+}
+
+export function canFallback(category: ModelFailureCategory) {
+  return category !== "unknown"
 }
 
 export function route(input: Input, policy = DEFAULT_POLICY): Decision {
@@ -303,6 +443,7 @@ export function start(taskID: TaskID, input: Input, policy = DEFAULT_POLICY): St
     assigned_role: initialDecision.role,
     attempts: [],
     usage: [],
+    model_failures: [],
     review: DEFAULT_REVIEW,
     review_history: [],
     escalations: 0,
@@ -392,17 +533,82 @@ export function recordValidation(state: State, input: RecordValidation): State {
   }
 }
 
-export function recordUsage(state: State, input: SessionUsage): State {
-  const existing = state.usage.find((usage) => usage.session_id === input.session_id)
-  if (existing && existing.role !== input.role) {
-    throw new Error(`Session ${input.session_id} is already tracked as ${existing.role}`)
+export function recordUsage(state: State, input: SessionUsageInput): State {
+  const usage: SessionUsage = {
+    ...input,
+    cost_status: input.cost_status ?? "estimated",
+    cost_source: input.cost_source ?? "provider",
   }
-  const next = { ...state, usage: [...state.usage.filter((item) => item.session_id !== input.session_id), input] }
-  if (next.policy.max_cost_usd === undefined || summarize(next).estimated_cost_usd <= next.policy.max_cost_usd) {
-    return next
+  const existing = state.usage.find((item) => item.session_id === usage.session_id)
+  if (existing && existing.role !== usage.role) {
+    throw new Error(`Session ${usage.session_id} is already tracked as ${existing.role}`)
   }
-  if (next.review.status === "in_progress" || next.status === "completed") return next
+  const next = {
+    ...state,
+    usage: [...state.usage.filter((item) => item.session_id !== usage.session_id), usage],
+  }
+  const summary = summarize(next)
+  if (next.policy.max_cost_usd === undefined || next.status === "completed") return next
+  if (summary.budget_status === "unavailable") {
+    if (next.review.status !== "in_progress") {
+      return { ...next, status: "blocked", transition_reason: "cost_unavailable" }
+    }
+    const review: Review = {
+      ...next.review,
+      status: "unavailable",
+      independent: false,
+      unavailable_reason: "cost_budget_unavailable",
+    }
+    return {
+      ...next,
+      review,
+      review_history: [...next.review_history, review],
+      status: "blocked",
+      transition_reason: "cost_unavailable",
+    }
+  }
+  if (summary.estimated_cost_usd <= next.policy.max_cost_usd) return next
+  if (next.review.status === "in_progress") {
+    const review: Review = {
+      ...next.review,
+      status: "unavailable",
+      independent: false,
+      unavailable_reason: "cost_budget_exceeded",
+    }
+    return {
+      ...next,
+      review,
+      review_history: [...next.review_history, review],
+      status: "blocked",
+      transition_reason: "max_cost_reached",
+    }
+  }
   return { ...next, status: "blocked", transition_reason: "max_cost_reached" }
+}
+
+export function recordModelFailure(state: State, input: ModelFailure): State {
+  if (state.status === "blocked" || state.status === "completed") {
+    throw new Error(`Task ${state.task_id} cannot record a model failure while ${state.status}`)
+  }
+  return { ...state, model_failures: [...state.model_failures, input] }
+}
+
+export function blockModelFailure(state: State, reason: "model_pool_exhausted" | "model_execution_failed"): State {
+  if (state.status === "completed") throw new Error(`Task ${state.task_id} is already completed`)
+  if (state.review.status !== "in_progress") return { ...state, status: "blocked", transition_reason: reason }
+  const review: Review = {
+    ...state.review,
+    status: "unavailable",
+    independent: false,
+    unavailable_reason: "reviewer_model_pool_exhausted",
+  }
+  return {
+    ...state,
+    review,
+    review_history: [...state.review_history, review],
+    status: "blocked",
+    transition_reason: reason,
+  }
 }
 
 export function prepareReview(state: State, reviewer?: ModelIdentity): State {
@@ -506,6 +712,7 @@ export function summarize(state: State): CostSummary {
             ...current,
             sessions: current.sessions + 1,
             estimated_cost_usd: current.estimated_cost_usd + item.estimated_cost_usd,
+            cost_status: current.cost_status === item.cost_status ? item.cost_status : "partial",
             input_tokens: current.input_tokens + item.input_tokens,
             output_tokens: current.output_tokens + item.output_tokens,
             reasoning_tokens: current.reasoning_tokens + item.reasoning_tokens,
@@ -518,6 +725,7 @@ export function summarize(state: State): CostSummary {
             model: item.model,
             sessions: 1,
             estimated_cost_usd: item.estimated_cost_usd,
+            cost_status: item.cost_status,
             input_tokens: item.input_tokens,
             output_tokens: item.output_tokens,
             reasoning_tokens: item.reasoning_tokens,
@@ -533,6 +741,20 @@ export function summarize(state: State): CostSummary {
   })
   const estimatedCost = state.usage.reduce((total, item) => total + item.estimated_cost_usd, 0)
   const maxCost = state.policy.max_cost_usd
+  const hasEstimatedCost = state.usage.some((item) => item.cost_status === "estimated")
+  const hasUnavailableCost = state.usage.some((item) => item.cost_status === "unavailable")
+  const costStatus =
+    state.usage.length === 0 || (hasEstimatedCost && !hasUnavailableCost)
+      ? ("estimated" as const)
+      : hasEstimatedCost
+        ? ("partial" as const)
+        : ("unavailable" as const)
+  const budgetStatus =
+    maxCost === undefined
+      ? ("not_configured" as const)
+      : costStatus === "estimated"
+        ? ("enforced" as const)
+        : ("unavailable" as const)
 
   return {
     task_id: state.task_id,
@@ -542,9 +764,15 @@ export function summarize(state: State): CostSummary {
     escalations: state.escalations,
     review: state.review,
     review_cycles: state.review_history.length,
+    cost_status: costStatus,
+    budget_status: budgetStatus,
+    model_failures: [...state.model_failures],
     ...(maxCost === undefined
       ? {}
-      : { max_cost_usd: maxCost, remaining_cost_usd: Math.max(0, maxCost - estimatedCost) }),
+      : {
+          max_cost_usd: maxCost,
+          ...(budgetStatus === "enforced" ? { remaining_cost_usd: Math.max(0, maxCost - estimatedCost) } : {}),
+        }),
     estimated_cost_usd: estimatedCost,
     tokens,
     usage,

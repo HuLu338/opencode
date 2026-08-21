@@ -315,7 +315,7 @@ describe("TaskRouter validation state", () => {
     )
   })
 
-  test("records a reviewer call that crosses the budget without allowing another model call", () => {
+  test("stops when a reviewer call crosses the budget", () => {
     const validated = TaskRouter.recordValidation(
       TaskRouter.start("AUTH-001", baseline, { ...TaskRouter.DEFAULT_POLICY, max_cost_usd: 0.015 }),
       {
@@ -349,13 +349,15 @@ describe("TaskRouter validation state", () => {
       estimated_cost_usd: 0.01,
     })
 
-    expect(withReviewerUsage).toMatchObject({ status: "ready_for_review", review: { status: "in_progress" } })
-    expect(
-      TaskRouter.recordReview(withReviewerUsage, {
-        reviewer_session_id: "ses_reviewer",
-        decision: "passed",
-      }),
-    ).toMatchObject({ status: "completed", transition_reason: "review_passed" })
+    expect(withReviewerUsage).toMatchObject({
+      status: "blocked",
+      transition_reason: "max_cost_reached",
+      review: {
+        status: "unavailable",
+        unavailable_reason: "cost_budget_exceeded",
+      },
+    })
+    expect(() => TaskRouter.assertConsistent(withReviewerUsage)).not.toThrow()
   })
 
   test("decodes Phase 3 state files without usage data", () => {
@@ -619,6 +621,173 @@ describe("TaskRouter validation state", () => {
     expect(Schema.decodeUnknownSync(TaskRouter.State)(legacy)).toMatchObject({
       review: { status: "not_started" },
       review_history: [],
+    })
+  })
+})
+
+describe("TaskRouter model pools and cost metadata", () => {
+  test("keeps the configured primary first and removes duplicate fallbacks", () => {
+    expect(
+      TaskRouter.resolveModelPool(
+        {
+          model_pools: {
+            "cheap-coder": ["provider/model-a", "provider/model-b", "provider/model-a"],
+          },
+        },
+        "cheap-coder",
+        "provider/model-a",
+      ),
+    ).toEqual(["provider/model-a", "provider/model-b"])
+  })
+
+  test.each([
+    ["API key is missing", "authentication"],
+    ["429 Too Many Requests", "rate_limit"],
+    ["This request requires more credits", "quota"],
+    ["Unknown model provider/model-a", "model_unavailable"],
+    ["Request timed out", "timeout"],
+    ["ECONNREFUSED", "network"],
+    ["503 Service Unavailable", "provider_error"],
+    ["400 invalid request", "invalid_request"],
+    ["unexpected execution failure", "unknown"],
+  ] as const)("classifies %s as %s", (message, category) => {
+    expect(TaskRouter.classifyModelFailure(message)).toBe(category)
+    expect(TaskRouter.canFallback(category)).toBe(category !== "unknown")
+  })
+
+  test("estimates configured token pricing per million tokens", () => {
+    expect(
+      TaskRouter.estimateCost(
+        {
+          input_tokens: 1_000_000,
+          output_tokens: 100_000,
+          reasoning_tokens: 50_000,
+          cache_read_tokens: 500_000,
+          cache_write_tokens: 10_000,
+        },
+        { input: 1, output: 4, reasoning: 2, cache_read: 0.25, cache_write: 1.5 },
+      ),
+    ).toBeCloseTo(1.64)
+  })
+
+  test("fails closed when a configured budget cannot be evaluated", () => {
+    const state = TaskRouter.recordUsage(
+      TaskRouter.start("AUTH-001", baseline, { ...TaskRouter.DEFAULT_POLICY, max_cost_usd: 0 }),
+      {
+        session_id: "ses_unknown_price",
+        role: "cheap-coder",
+        provider: "provider-a",
+        model: "model-a",
+        input_tokens: 100,
+        output_tokens: 20,
+        reasoning_tokens: 0,
+        cache_read_tokens: 0,
+        cache_write_tokens: 0,
+        estimated_cost_usd: 0,
+        cost_status: "unavailable",
+        cost_source: "unavailable",
+      },
+    )
+
+    expect(state).toMatchObject({ status: "blocked", transition_reason: "cost_unavailable" })
+    expect(TaskRouter.summarize(state)).toMatchObject({
+      cost_status: "unavailable",
+      budget_status: "unavailable",
+    })
+    expect(TaskRouter.summarize(state).remaining_cost_usd).toBeUndefined()
+  })
+
+  test("continues tracking unavailable pricing when no cost cap is configured", () => {
+    const state = TaskRouter.recordUsage(TaskRouter.start("AUTH-001", baseline), {
+      session_id: "ses_unknown_price",
+      role: "cheap-coder",
+      provider: "provider-a",
+      model: "model-a",
+      input_tokens: 100,
+      output_tokens: 20,
+      reasoning_tokens: 0,
+      cache_read_tokens: 0,
+      cache_write_tokens: 0,
+      estimated_cost_usd: 0,
+      cost_status: "unavailable",
+      cost_source: "unavailable",
+    })
+
+    expect(state.status).toBe("ready")
+    expect(TaskRouter.summarize(state)).toMatchObject({
+      cost_status: "unavailable",
+      budget_status: "not_configured",
+    })
+  })
+
+  test("records infrastructure failures without consuming implementation attempts", () => {
+    const state = TaskRouter.recordModelFailure(TaskRouter.start("AUTH-001", baseline), {
+      role: "cheap-coder",
+      provider: "provider-a",
+      model: "model-a",
+      category: "quota",
+      summary: "credits exhausted",
+    })
+
+    expect(state.attempts).toEqual([])
+    expect(state.model_failures).toHaveLength(1)
+    expect(TaskRouter.blockModelFailure(state, "model_pool_exhausted")).toMatchObject({
+      status: "blocked",
+      transition_reason: "model_pool_exhausted",
+    })
+  })
+
+  test("closes an in-progress review consistently when its model pool is exhausted", () => {
+    const validated = TaskRouter.recordValidation(TaskRouter.start("AUTH-001", baseline), {
+      role: "cheap-coder",
+      checks: [{ name: "focused tests", command: "bun test", status: "passed" }],
+    })
+    const withAuthor = TaskRouter.recordUsage(validated, {
+      session_id: "ses_author",
+      role: "cheap-coder",
+      provider: "provider-a",
+      model: "model-a",
+      input_tokens: 100,
+      output_tokens: 20,
+      reasoning_tokens: 0,
+      cache_read_tokens: 0,
+      cache_write_tokens: 0,
+      estimated_cost_usd: 0,
+    })
+    const prepared = TaskRouter.prepareReview(withAuthor, { provider: "provider-b", model: "model-b" })
+    const state = TaskRouter.blockModelFailure(prepared, "model_pool_exhausted")
+
+    expect(state).toMatchObject({
+      status: "blocked",
+      transition_reason: "model_pool_exhausted",
+      review: {
+        status: "unavailable",
+        unavailable_reason: "reviewer_model_pool_exhausted",
+      },
+    })
+    expect(() => TaskRouter.assertConsistent(state)).not.toThrow()
+  })
+
+  test("decodes older usage records with explicitly unavailable pricing", () => {
+    const state = TaskRouter.recordUsage(TaskRouter.start("AUTH-001", baseline), {
+      session_id: "ses_legacy",
+      role: "cheap-coder",
+      provider: "provider-a",
+      model: "model-a",
+      input_tokens: 100,
+      output_tokens: 20,
+      reasoning_tokens: 0,
+      cache_read_tokens: 0,
+      cache_write_tokens: 0,
+      estimated_cost_usd: 0,
+    })
+    const raw = JSON.parse(JSON.stringify(state))
+    delete raw.usage[0].cost_status
+    delete raw.usage[0].cost_source
+
+    expect(Schema.decodeUnknownSync(TaskRouter.State)(raw).usage[0]).toMatchObject({
+      cost_status: "unavailable",
+      cost_source: "unavailable",
     })
   })
 })

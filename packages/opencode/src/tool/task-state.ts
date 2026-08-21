@@ -5,10 +5,12 @@ import { InstanceState } from "@/effect/instance-state"
 import { Session } from "@/session/session"
 import { SessionID } from "@/session/schema"
 import { Agent } from "@/agent/agent"
+import { Provider } from "@/provider/provider"
 import { Effect, Schema } from "effect"
 import path from "path"
 import * as Tool from "./tool"
 import DESCRIPTION from "./task-state.txt"
+import { costMetadata } from "./task-usage"
 
 const NonNegativeIntParameter = Schema.Union([
   TaskRouter.Input.fields.number_of_files,
@@ -80,7 +82,7 @@ type Metadata = {
 export const TaskStateTool = Tool.define<
   typeof Parameters,
   Metadata,
-  FSUtil.Service | Config.Service | Session.Service | Agent.Service
+  FSUtil.Service | Config.Service | Session.Service | Agent.Service | Provider.Service
 >(
   "task_state",
   Effect.gen(function* () {
@@ -88,6 +90,7 @@ export const TaskStateTool = Tool.define<
     const config = yield* Config.Service
     const sessions = yield* Session.Service
     const agents = yield* Agent.Service
+    const providers = yield* Provider.Service
 
     const load = Effect.fn("TaskStateTool.load")(function* (filepath: string) {
       const raw = yield* fs.readJson(filepath).pipe(Effect.orDie)
@@ -145,17 +148,40 @@ export const TaskStateTool = Tool.define<
           if (params.action === "record_usage") {
             const session = yield* sessions.get(params.session_id).pipe(Effect.orDie)
             const tokens = session.tokens ?? { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }
-            const state = TaskRouter.recordUsage(current, {
-              session_id: String(params.session_id),
-              role: params.role,
-              provider: session.model ? String(session.model.providerID) : "unknown",
-              model: session.model ? String(session.model.id) : "unknown",
+            const usageTokens = {
               input_tokens: tokens.input,
               output_tokens: tokens.output,
               reasoning_tokens: tokens.reasoning,
               cache_read_tokens: tokens.cache.read,
               cache_write_tokens: tokens.cache.write,
-              estimated_cost_usd: session.cost ?? 0,
+            }
+            const cfg = yield* config.get()
+            const provider = session.model ? String(session.model.providerID) : "unknown"
+            const model = session.model ? String(session.model.id) : "unknown"
+            const modelRef = `${provider}/${model}`
+            const pricing = cfg.cost_aware?.pricing_usd_per_million?.[modelRef]
+            const loadCatalog = session.model
+              ? providers.getModel(session.model.providerID, session.model.id).pipe(
+                  Effect.catchIf(
+                    (error): error is Provider.ModelNotFoundError => Provider.ModelNotFoundError.isInstance(error),
+                    () => Effect.succeed(undefined),
+                  ),
+                )
+              : Effect.succeed(undefined)
+            const catalog = yield* loadCatalog
+            const cost = costMetadata({
+              tokens: usageTokens,
+              sessionCost: session.cost,
+              configured: pricing,
+              provider: catalog?.cost,
+            })
+            const state = TaskRouter.recordUsage(current, {
+              session_id: String(params.session_id),
+              role: params.role,
+              provider,
+              model,
+              ...usageTokens,
+              ...cost,
             })
             yield* ctx.ask({
               permission: "edit",
@@ -168,13 +194,26 @@ export const TaskStateTool = Tool.define<
           }
 
           if (params.action === "prepare_review") {
+            const cfg = yield* config.get()
             const reviewer = yield* agents.get("reviewer")
+            const primary = reviewer?.model ? `${reviewer.model.providerID}/${reviewer.model.modelID}` : undefined
+            const candidates = TaskRouter.resolveModelPool(cfg.cost_aware, "reviewer", primary).filter(
+              (item) =>
+                !current.model_failures.some(
+                  (failure) => failure.role === "reviewer" && `${failure.provider}/${failure.model}` === item,
+                ),
+            )
+            const attempt = current.attempts.at(-1)
+            const author = attempt ? current.usage.findLast((item) => item.role === attempt.role) : undefined
+            const candidate =
+              candidates.find((item) => item !== `${author?.provider}/${author?.model}`) ?? candidates[0]
+            const model = candidate ? Provider.parseModel(candidate) : undefined
             const state = TaskRouter.prepareReview(
               current,
-              reviewer?.model
+              model
                 ? {
-                    provider: String(reviewer.model.providerID),
-                    model: String(reviewer.model.modelID),
+                    provider: String(model.providerID),
+                    model: String(model.modelID),
                   }
                 : undefined,
             )

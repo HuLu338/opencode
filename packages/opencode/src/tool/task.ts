@@ -14,6 +14,8 @@ import { Effect, Exit, Schema, Scope } from "effect"
 import { EffectBridge } from "@/effect/bridge"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { Database } from "@opencode-ai/core/database/database"
+import { ProviderV2 } from "@opencode-ai/core/provider"
+import { ModelV2 } from "@opencode-ai/core/model"
 
 export interface TaskPromptOps {
   cancel(sessionID: SessionID): Effect.Effect<void>
@@ -178,10 +180,11 @@ export const TaskTool = Tool.define(
       if (msg.info.role !== "assistant") return yield* Effect.fail(new Error("Not an assistant message"))
       const variant = msg.info.variant
 
-      const model = next.model ?? {
-        modelID: msg.info.modelID,
-        providerID: msg.info.providerID,
-      }
+      const model = taskModelOverride(ctx.extra) ??
+        next.model ?? {
+          modelID: msg.info.modelID,
+          providerID: msg.info.providerID,
+        }
       const metadata = {
         parentSessionId: ctx.sessionID,
         sessionId: nextSession.id,
@@ -325,7 +328,17 @@ export const TaskTool = Tool.define(
               background.waitForPromotion(nextSession.id),
             )
             if (result?.metadata?.background === true) return backgroundResult()
-            if (result?.status === "error") return yield* Effect.fail(new Error(result.error ?? "Task failed"))
+            if (result?.status === "error") {
+              const error = result.error ?? "Task failed"
+              if (ctx.extra?.captureTaskErrors === true) {
+                return {
+                  title: params.description,
+                  metadata: { ...metadata, error },
+                  output: renderOutput({ sessionID: nextSession.id, state: "error", text: error }),
+                }
+              }
+              return yield* Effect.fail(new Error(error))
+            }
             if (result?.status === "cancelled") return yield* Effect.fail(new Error("Task cancelled"))
             return {
               title: params.description,
@@ -358,3 +371,14 @@ export const TaskTool = Tool.define(
     }
   }),
 )
+
+function taskModelOverride(extra: Tool.Context["extra"]) {
+  const value = extra?.taskModel
+  if (typeof value !== "object" || value === null) return undefined
+  if (!("providerID" in value) || typeof value.providerID !== "string") return undefined
+  if (!("modelID" in value) || typeof value.modelID !== "string") return undefined
+  return {
+    providerID: ProviderV2.ID.make(value.providerID),
+    modelID: ModelV2.ID.make(value.modelID),
+  }
+}

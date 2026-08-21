@@ -642,6 +642,61 @@ it.instance("handles agent configuration", () =>
   }),
 )
 
+it.instance("loads bounded model pools and explicit pricing", () =>
+  Effect.gen(function* () {
+    const test = yield* TestInstance
+    yield* writeConfigEffect(test.directory, {
+      $schema: "https://opencode.ai/config.json",
+      cost_aware: {
+        max_cost_usd: 2,
+        model_pools: {
+          "cheap-coder": ["provider/model-a", "provider/model-b"],
+          reviewer: ["provider/model-c"],
+        },
+        pricing_usd_per_million: {
+          "provider/model-a": {
+            input: 1,
+            output: 4,
+            cache_read: 0.25,
+          },
+        },
+        sandbox: {
+          enabled: true,
+          image: "opencode-cost-aware-sandbox:local",
+          network: "none",
+          memory_mb: 4096,
+          cpus: 2,
+          pids_limit: 512,
+        },
+      },
+    })
+    const config = yield* Config.use.get()
+
+    expect(config.cost_aware).toEqual({
+      max_cost_usd: 2,
+      model_pools: {
+        "cheap-coder": ["provider/model-a", "provider/model-b"],
+        reviewer: ["provider/model-c"],
+      },
+      pricing_usd_per_million: {
+        "provider/model-a": {
+          input: 1,
+          output: 4,
+          cache_read: 0.25,
+        },
+      },
+      sandbox: {
+        enabled: true,
+        image: "opencode-cost-aware-sandbox:local",
+        network: "none",
+        memory_mb: 4096,
+        cpus: 2,
+        pids_limit: 512,
+      },
+    })
+  }),
+)
+
 it.instance("treats agent variant as model-scoped setting (not provider option)", () =>
   Effect.gen(function* () {
     const test = yield* TestInstance

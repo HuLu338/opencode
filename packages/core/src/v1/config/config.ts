@@ -147,8 +147,8 @@ export const Info = Schema.Struct({
     description:
       "Thresholds for truncating tool output. When output exceeds either limit, the full text is written to the truncation directory and a preview is returned.",
   }),
-  cost_aware: Schema.optional(TaskRouter.PolicyConfig).annotate({
-    description: "Retry and escalation limits for cost-aware coding task orchestration",
+  cost_aware: Schema.optional(TaskRouter.CostAwareConfig).annotate({
+    description: "Routing model pools, pricing, retry, escalation, and budget settings for cost-aware orchestration",
   }),
   compaction: Schema.optional(
     Schema.Struct({

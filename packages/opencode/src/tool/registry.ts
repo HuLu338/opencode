@@ -37,6 +37,7 @@ import path from "path"
 import { pathToFileURL } from "url"
 import { Effect, Layer, Context } from "effect"
 import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
+import { AppProcess } from "@opencode-ai/core/process"
 import { Format } from "../format"
 import { InstanceState } from "@/effect/instance-state"
 import { EffectBridge } from "@/effect/bridge"
@@ -448,6 +449,7 @@ export const node = LayerNode.make({
     EventV2Bridge.node,
     httpClient,
     CrossSpawnSpawner.node,
+    AppProcess.node,
     Format.node,
     Truncate.node,
     RuntimeFlags.node,
