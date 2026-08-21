@@ -13,10 +13,19 @@ export type Command = {
   args: string[]
 }
 
+export function deduplicateCommands<T extends { command: string; workdir?: string }>(commands: readonly T[]) {
+  return commands.filter(
+    (command, index) =>
+      index === commands.findIndex((item) => item.command === command.command && item.workdir === command.workdir),
+  )
+}
+
 export function command(input: {
   repository: string
   workdir?: string
   command: string
+  name: string
+  timeout: number
   config?: TaskRouter.SandboxConfig
 }): Command {
   const workdir = normalizeWorkdir(input.workdir)
@@ -52,6 +61,10 @@ export function command(input: {
       "CI=1",
       "--env",
       "HOME=/home/opencode",
+      "--env",
+      `OPENCODE_VALIDATION_TIMEOUT_MS=${input.timeout}`,
+      "--name",
+      input.name,
       config?.image ?? DEFAULT_IMAGE,
       workdir,
       input.command,

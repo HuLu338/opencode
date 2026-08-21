@@ -24,7 +24,16 @@ tar \
   --exclude='*/node_modules' \
   --exclude='*/node_modules/*' \
   --exclude='./.turbo' \
+  --exclude='*/.turbo' \
+  --exclude='*/.turbo/*' \
   --exclude='./dist' \
+  --exclude='*/dist' \
+  --exclude='*/dist/*' \
+  --exclude='*/target' \
+  --exclude='*/target/*' \
+  --exclude='*/coverage' \
+  --exclude='*/coverage/*' \
+  --exclude='./packages/desktop/resources/opencode-cli.exe' \
   --exclude='./.env' \
   --exclude='./.env.*' \
   --exclude='./.opencode/task-state' \
@@ -36,4 +45,6 @@ if [ -d /workspace/.git ]; then
 fi
 
 cd "$target/$workdir"
-exec /bin/sh -lc "$command"
+timeout_ms="${OPENCODE_VALIDATION_TIMEOUT_MS:-120000}"
+timeout_seconds="$(( (timeout_ms + 999) / 1000 ))"
+exec timeout --signal=TERM --kill-after=5s "$timeout_seconds" /bin/sh -lc "$command"

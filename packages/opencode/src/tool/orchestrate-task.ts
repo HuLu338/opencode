@@ -22,6 +22,8 @@ const NonNegativeIntParameter = Schema.Union([
   Schema.NumberFromString.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(0)),
 ])
 
+const SANDBOX_STARTUP_TIMEOUT = 2 * 60 * 1000
+
 const PositiveIntParameter = Schema.Union([
   Schema.Int.check(Schema.isGreaterThan(0)),
   Schema.NumberFromString.check(Schema.isInt(), Schema.isGreaterThan(0)),
@@ -289,22 +291,34 @@ export const OrchestrateTaskTool = Tool.define(
 
           const validate = Effect.fn("OrchestrateTaskTool.validate")(function* () {
             return yield* Effect.forEach(
-              params.validation_commands,
+              TaskSandbox.deduplicateCommands(params.validation_commands),
               Effect.fnUntraced(function* (command) {
                 if (costAware?.sandbox?.enabled) {
+                  const name = `opencode-validation-${crypto.randomUUID()}`
+                  const timeout = command.timeout ?? 2 * 60 * 1000
                   const sandbox = TaskSandbox.command({
                     repository: instance.worktree,
                     workdir: command.workdir,
                     command: command.command,
+                    name,
+                    timeout,
                     config: costAware.sandbox,
                   })
+                  const cleanup = processes
+                    .run(ChildProcess.make("docker", ["rm", "-f", name], { cwd: instance.worktree }), {
+                      combineOutput: true,
+                      maxOutputBytes: 4096,
+                      timeout: 30_000,
+                    })
+                    .pipe(Effect.ignore)
                   const result = yield* processes
                     .run(ChildProcess.make(sandbox.executable, sandbox.args, { cwd: instance.worktree }), {
                       combineOutput: true,
                       maxOutputBytes: 51_200,
-                      timeout: command.timeout ?? 2 * 60 * 1000,
+                      timeout: timeout + SANDBOX_STARTUP_TIMEOUT,
                     })
                     .pipe(
+                      Effect.ensuring(cleanup),
                       Effect.map((output) => ({
                         exitCode: output.exitCode,
                         output: output.output?.toString("utf8") ?? "",
