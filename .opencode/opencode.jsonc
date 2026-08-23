@@ -18,6 +18,9 @@
     },
   },
   "cost_aware": {
+    // ChatGPT/Codex OAuth is covered by the subscription, so marginal token cost is zero.
+    // Change this to "provider" for metered API credentials; provider/session pricing is then authoritative.
+    "billing_mode": "subscription",
     "max_attempts": 3,
     "max_escalations": 1,
     "max_cost_usd": 5,
@@ -29,15 +32,6 @@
       "cheap-coder": ["openai/gpt-5.4-mini", "openai/gpt-5.4-mini-fast"],
       "strong-coder": ["openai/gpt-5.5", "openai/gpt-5.6-terra"],
       "reviewer": ["openai/gpt-5.6-luna", "openai/gpt-5.4"],
-    },
-    // OAuth-backed Codex models have zero marginal per-token API cost in this setup.
-    "pricing_usd_per_million": {
-      "openai/gpt-5.4-mini": { "input": 0, "output": 0 },
-      "openai/gpt-5.4-mini-fast": { "input": 0, "output": 0 },
-      "openai/gpt-5.4": { "input": 0, "output": 0 },
-      "openai/gpt-5.5": { "input": 0, "output": 0 },
-      "openai/gpt-5.6-luna": { "input": 0, "output": 0 },
-      "openai/gpt-5.6-terra": { "input": 0, "output": 0 },
     },
     // Docker Desktop and the local validation image are required while this is enabled.
     "sandbox": {

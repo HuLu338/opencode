@@ -22,6 +22,7 @@ export function deduplicateCommands<T extends { command: string; workdir?: strin
 
 export function command(input: {
   repository: string
+  archive?: string
   workdir?: string
   command: string
   name: string
@@ -51,6 +52,7 @@ export function command(input: {
       String(config?.cpus ?? DEFAULT_CPUS),
       "--mount",
       `type=bind,src=${path.resolve(input.repository)},dst=/workspace,readonly`,
+      ...(input.archive ? ["--mount", `type=bind,src=${path.resolve(input.archive)},dst=/workspace.tar,readonly`] : []),
       "--mount",
       "type=volume,dst=/work",
       "--tmpfs",
@@ -70,6 +72,26 @@ export function command(input: {
       input.command,
     ],
   }
+}
+
+export function archiveEntries(listing: string, deleted = "") {
+  const removed = new Set(deleted.split("\0").filter(Boolean))
+  return listing
+    .split("\0")
+    .filter(Boolean)
+    .map((item) => item.replaceAll("\\", "/"))
+    .filter((item) => !removed.has(item))
+    .filter((item) => {
+      if (path.posix.isAbsolute(item) || item === ".." || item.startsWith("../")) return false
+      const parts = item.split("/")
+      if (parts.some((part) => [".git", ".tmp", "tmp", "artifacts", "node_modules", ".turbo"].includes(part))) {
+        return false
+      }
+      if (parts.some((part) => ["dist", "target", "coverage"].includes(part))) return false
+      if (parts.at(-1) === ".env" || parts.at(-1)?.startsWith(".env.")) return false
+      if (item.startsWith(".opencode/task-state/")) return false
+      return !item.startsWith("packages/desktop/resources/opencode-cli")
+    })
 }
 
 export function status(exitCode: number): TaskRouter.CheckStatus {

@@ -16,6 +16,14 @@ const zero = {
 }
 
 describe("task usage cost metadata", () => {
+  test("records fixed-subscription calls as known zero marginal cost", () => {
+    expect(costMetadata({ tokens, billingMode: "subscription", provider: zero })).toEqual({
+      estimated_cost_usd: 0,
+      cost_status: "estimated",
+      cost_source: "subscription",
+    })
+  })
+
   test("treats explicitly configured zero pricing as a known estimate", () => {
     expect(costMetadata({ tokens, configured: { input: 0, output: 0 }, provider: zero })).toEqual({
       estimated_cost_usd: 0,

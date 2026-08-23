@@ -14,30 +14,34 @@ find /seed \
   mkdir -p "$target/$(dirname "$relative")"
   cp -a "$dependencies" "$target/$(dirname "$relative")/"
 done
-tar \
-  --exclude='./.tmp' \
-  --exclude='./tmp' \
-  --exclude='./artifacts' \
-  --exclude='./.git' \
-  --exclude='./.git/*' \
-  --exclude='./node_modules' \
-  --exclude='*/node_modules' \
-  --exclude='*/node_modules/*' \
-  --exclude='./.turbo' \
-  --exclude='*/.turbo' \
-  --exclude='*/.turbo/*' \
-  --exclude='./dist' \
-  --exclude='*/dist' \
-  --exclude='*/dist/*' \
-  --exclude='*/target' \
-  --exclude='*/target/*' \
-  --exclude='*/coverage' \
-  --exclude='*/coverage/*' \
-  --exclude='./packages/desktop/resources/opencode-cli.exe' \
-  --exclude='./.env' \
-  --exclude='./.env.*' \
-  --exclude='./.opencode/task-state' \
-  -C /workspace -cf - . | tar -C "$target" -xf -
+if [ -f /workspace.tar ]; then
+  tar -C "$target" -xf /workspace.tar
+else
+  tar \
+    --exclude='./.tmp' \
+    --exclude='./tmp' \
+    --exclude='./artifacts' \
+    --exclude='./.git' \
+    --exclude='./.git/*' \
+    --exclude='./node_modules' \
+    --exclude='*/node_modules' \
+    --exclude='*/node_modules/*' \
+    --exclude='./.turbo' \
+    --exclude='*/.turbo' \
+    --exclude='*/.turbo/*' \
+    --exclude='./dist' \
+    --exclude='*/dist' \
+    --exclude='*/dist/*' \
+    --exclude='*/target' \
+    --exclude='*/target/*' \
+    --exclude='*/coverage' \
+    --exclude='*/coverage/*' \
+    --exclude='./packages/desktop/resources/opencode-cli.exe' \
+    --exclude='./.env' \
+    --exclude='./.env.*' \
+    --exclude='./.opencode/task-state' \
+    -C /workspace -cf - . | tar -C "$target" -xf -
+fi
 
 if [ -d /workspace/.git ]; then
   export GIT_DIR=/workspace/.git

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { command, deduplicateCommands, status } from "@/tool/task-sandbox"
+import { archiveEntries, command, deduplicateCommands, status } from "@/tool/task-sandbox"
 import path from "path"
 
 describe("task sandbox", () => {
@@ -62,6 +62,37 @@ describe("task sandbox", () => {
     expect(result.args).toContain("--cap-drop")
   })
 
+  test("mounts a prepared repository archive without replacing the read-only source mount", () => {
+    const archive = path.resolve("repository.tar")
+    const result = command({
+      repository: path.resolve("repository"),
+      archive,
+      command: "bun typecheck",
+      name: "opencode-validation-test",
+      timeout: 30_000,
+    })
+
+    expect(result.args).toContain(`type=bind,src=${archive},dst=/workspace.tar,readonly`)
+    expect(result.args.filter((item) => item.startsWith("type=bind,"))).toHaveLength(2)
+  })
+
+  test("selects safe tracked and untracked files for a portable archive", () => {
+    const listing = [
+      "packages/opencode/src/index.ts",
+      "new file.txt",
+      "artifacts/report.png",
+      "packages/app/dist/index.js",
+      ".env.production",
+      ".opencode/task-state/TASK.json",
+      "packages/desktop/resources/opencode-cli",
+      "../outside.txt",
+      "deleted.ts",
+      "",
+    ].join("\0")
+
+    expect(archiveEntries(listing, "deleted.ts\0")).toEqual(["packages/opencode/src/index.ts", "new file.txt"])
+  })
+
   test("rejects workdirs outside the repository", () => {
     expect(() =>
       command({
@@ -102,6 +133,7 @@ describe("task sandbox", () => {
       expect(entrypoint).toContain(`--exclude='${item}'`)
     }
     expect(entrypoint).toContain("OPENCODE_VALIDATION_TIMEOUT_MS")
+    expect(entrypoint).toContain("[ -f /workspace.tar ]")
     expect(entrypoint).toContain("timeout --signal=TERM --kill-after=5s")
   })
 })

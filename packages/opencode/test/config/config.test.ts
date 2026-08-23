@@ -648,6 +648,7 @@ it.instance("loads bounded model pools and explicit pricing", () =>
     yield* writeConfigEffect(test.directory, {
       $schema: "https://opencode.ai/config.json",
       cost_aware: {
+        billing_mode: "provider",
         max_cost_usd: 2,
         model_pools: {
           "cheap-coder": ["provider/model-a", "provider/model-b"],
@@ -673,6 +674,7 @@ it.instance("loads bounded model pools and explicit pricing", () =>
     const config = yield* Config.use.get()
 
     expect(config.cost_aware).toEqual({
+      billing_mode: "provider",
       max_cost_usd: 2,
       model_pools: {
         "cheap-coder": ["provider/model-a", "provider/model-b"],

@@ -176,6 +176,7 @@ export const OrchestrateTaskTool = Tool.define(
             const cost = costMetadata({
               tokens: usageTokens,
               sessionCost: session.cost,
+              billingMode: costAware?.billing_mode,
               configured: pricing,
               provider: catalog?.cost,
             })
@@ -289,70 +290,149 @@ export const OrchestrateTaskTool = Tool.define(
             }
           })
 
+          const prepareSandboxArchive = Effect.fn("OrchestrateTaskTool.prepareSandboxArchive")(function* (
+            archive: string,
+            manifest: string,
+          ) {
+            const options = {
+              cwd: instance.worktree,
+              combineOutput: true,
+              maxOutputBytes: 50 * 1024 * 1024,
+              timeout: 60_000,
+            }
+            const listing = yield* processes.run(
+              ChildProcess.make("git", ["ls-files", "-z", "--cached", "--others", "--exclude-standard"], {
+                cwd: instance.worktree,
+              }),
+              options,
+            )
+            const deleted = yield* processes.run(
+              ChildProcess.make("git", ["ls-files", "-z", "--deleted"], { cwd: instance.worktree }),
+              options,
+            )
+            if (listing.exitCode !== 0 || deleted.exitCode !== 0) {
+              return yield* Effect.fail(new Error("Could not enumerate repository files for sandbox validation"))
+            }
+            const allowedFiles = (yield* Effect.forEach(
+              TaskSandbox.archiveEntries(`${params.allowed_files.join("\0")}\0`),
+              Effect.fnUntraced(function* (file) {
+                return (yield* fs.isFile(path.join(instance.worktree, file))) ? file : undefined
+              }),
+            )).filter((file): file is string => file !== undefined)
+            const files = [
+              ...new Set([
+                ...TaskSandbox.archiveEntries(
+                  listing.output?.toString("utf8") ?? "",
+                  deleted.output?.toString("utf8") ?? "",
+                ),
+                ...allowedFiles,
+              ]),
+            ]
+            if (files.length === 0) return yield* Effect.fail(new Error("Sandbox archive would contain no files"))
+            yield* fs.writeWithDirs(manifest, `${files.join("\0")}\0`).pipe(Effect.orDie)
+            const result = yield* processes.run(
+              ChildProcess.make("tar", ["-cf", archive, "--null", "-T", manifest], { cwd: instance.worktree }),
+              { combineOutput: true, maxOutputBytes: 51_200, timeout: 2 * 60 * 1000 },
+            )
+            if (result.exitCode !== 0) {
+              return yield* Effect.fail(
+                new Error(`Could not prepare sandbox archive: ${concise(result.output?.toString("utf8") ?? "")}`),
+              )
+            }
+            return { archive, manifest }
+          })
+
           const validate = Effect.fn("OrchestrateTaskTool.validate")(function* () {
-            return yield* Effect.forEach(
-              TaskSandbox.deduplicateCommands(params.validation_commands),
-              Effect.fnUntraced(function* (command) {
-                if (costAware?.sandbox?.enabled) {
-                  const name = `opencode-validation-${crypto.randomUUID()}`
-                  const timeout = command.timeout ?? 2 * 60 * 1000
-                  const sandbox = TaskSandbox.command({
-                    repository: instance.worktree,
-                    workdir: command.workdir,
-                    command: command.command,
-                    name,
-                    timeout,
-                    config: costAware.sandbox,
-                  })
-                  const cleanup = processes
-                    .run(ChildProcess.make("docker", ["rm", "-f", name], { cwd: instance.worktree }), {
-                      combineOutput: true,
-                      maxOutputBytes: 4096,
-                      timeout: 30_000,
+            const commands = TaskSandbox.deduplicateCommands(params.validation_commands)
+            const run = (archive?: string) =>
+              Effect.forEach(
+                commands,
+                Effect.fnUntraced(function* (command) {
+                  if (costAware?.sandbox?.enabled) {
+                    const name = `opencode-validation-${crypto.randomUUID()}`
+                    const timeout = command.timeout ?? 2 * 60 * 1000
+                    const sandbox = TaskSandbox.command({
+                      repository: instance.worktree,
+                      archive,
+                      workdir: command.workdir,
+                      command: command.command,
+                      name,
+                      timeout,
+                      config: costAware.sandbox,
                     })
-                    .pipe(Effect.ignore)
-                  const result = yield* processes
-                    .run(ChildProcess.make(sandbox.executable, sandbox.args, { cwd: instance.worktree }), {
-                      combineOutput: true,
-                      maxOutputBytes: 51_200,
-                      timeout: timeout + SANDBOX_STARTUP_TIMEOUT,
-                    })
-                    .pipe(
-                      Effect.ensuring(cleanup),
-                      Effect.map((output) => ({
-                        exitCode: output.exitCode,
-                        output: output.output?.toString("utf8") ?? "",
-                        unavailable: false,
-                      })),
-                      Effect.catch((error) =>
-                        Effect.succeed({ exitCode: 125, output: error.message, unavailable: true }),
-                      ),
-                    )
+                    const cleanup = processes
+                      .run(ChildProcess.make("docker", ["rm", "-f", name], { cwd: instance.worktree }), {
+                        combineOutput: true,
+                        maxOutputBytes: 4096,
+                        timeout: 30_000,
+                      })
+                      .pipe(Effect.ignore)
+                    const result = yield* processes
+                      .run(ChildProcess.make(sandbox.executable, sandbox.args, { cwd: instance.worktree }), {
+                        combineOutput: true,
+                        maxOutputBytes: 51_200,
+                        timeout: timeout + SANDBOX_STARTUP_TIMEOUT,
+                      })
+                      .pipe(
+                        Effect.ensuring(cleanup),
+                        Effect.map((output) => ({
+                          exitCode: output.exitCode,
+                          output: output.output?.toString("utf8") ?? "",
+                          unavailable: false,
+                        })),
+                        Effect.catch((error) =>
+                          Effect.succeed({ exitCode: 125, output: error.message, unavailable: true }),
+                        ),
+                      )
+                    return {
+                      name: command.name,
+                      command: command.command,
+                      status: result.unavailable ? ("unavailable" as const) : TaskSandbox.status(result.exitCode),
+                      executor: "docker" as const,
+                      summary: concise(result.output),
+                    }
+                  }
+                  const result = yield* shellDef.execute(
+                    {
+                      command: command.command,
+                      ...(command.workdir ? { workdir: command.workdir } : {}),
+                      ...(command.timeout ? { timeout: command.timeout } : {}),
+                    },
+                    ctx,
+                  )
                   return {
                     name: command.name,
                     command: command.command,
-                    status: result.unavailable ? ("unavailable" as const) : TaskSandbox.status(result.exitCode),
-                    executor: "docker" as const,
+                    status: result.metadata.exit === 0 ? ("passed" as const) : ("failed" as const),
+                    executor: "host" as const,
                     summary: concise(result.output),
                   }
-                }
-                const result = yield* shellDef.execute(
-                  {
+                }),
+                { concurrency: 1 },
+              )
+
+            if (!costAware?.sandbox?.enabled) return yield* run()
+            const id = crypto.randomUUID()
+            const archive = path.join(instance.worktree, ".tmp", "task-sandbox", `${id}.tar`)
+            const manifest = `${archive}.files`
+            const cleanup = Effect.all([fs.remove(archive), fs.remove(manifest)]).pipe(Effect.ignore)
+            return yield* Effect.acquireUseRelease(
+              prepareSandboxArchive(archive, manifest),
+              () => run(archive),
+              () => Effect.void,
+            ).pipe(
+              Effect.ensuring(cleanup),
+              Effect.catch((error) =>
+                Effect.succeed(
+                  commands.map((command) => ({
+                    name: command.name,
                     command: command.command,
-                    ...(command.workdir ? { workdir: command.workdir } : {}),
-                    ...(command.timeout ? { timeout: command.timeout } : {}),
-                  },
-                  ctx,
-                )
-                return {
-                  name: command.name,
-                  command: command.command,
-                  status: result.metadata.exit === 0 ? ("passed" as const) : ("failed" as const),
-                  executor: "host" as const,
-                  summary: concise(result.output),
-                }
-              }),
-              { concurrency: 1 },
+                    status: "unavailable" as const,
+                    executor: "docker" as const,
+                    summary: concise(error.message),
+                  })),
+                ),
+              ),
             )
           })
 
@@ -461,6 +541,31 @@ export const OrchestrateTaskTool = Tool.define(
           )
           const state = yield* codingCycle(initial, latestAuthorUsage?.session_id)
           const summary = TaskRouter.summarize(state)
+          const scopedChanges = yield* processes
+            .run(
+              ChildProcess.make(
+                "git",
+                [
+                  "status",
+                  "--porcelain=v1",
+                  "-z",
+                  "--untracked-files=all",
+                  "--ignored=matching",
+                  "--",
+                  ...params.allowed_files,
+                ],
+                { cwd: instance.worktree },
+              ),
+              { combineOutput: true, maxOutputBytes: 1024 * 1024, timeout: 30_000 },
+            )
+            .pipe(
+              Effect.map((result) => {
+                if (result.exitCode !== 0) return { status: "unknown" as const, files: [] as string[] }
+                const files = parseChangedFiles(result.output?.toString("utf8") ?? "")
+                return { status: files.length > 0 ? ("detected" as const) : ("none" as const), files }
+              }),
+              Effect.catch(() => Effect.succeed({ status: "unknown" as const, files: [] as string[] })),
+            )
           return {
             title: `Task ${state.task_id}: ${state.status}`,
             metadata: { filepath, state, summary, author_outputs: authorOutputs, reviewer_outputs: reviewerOutputs },
@@ -472,7 +577,8 @@ export const OrchestrateTaskTool = Tool.define(
                 state_path: filepath,
                 validation: state.attempts.at(-1)?.checks ?? [],
                 review: state.review,
-                unresolved_risks: unresolvedRisks(state, reviewerOutputs),
+                scoped_changes: scopedChanges,
+                unresolved_risks: unresolvedRisks(state, reviewerOutputs, scopedChanges),
               },
               null,
               2,
@@ -532,6 +638,18 @@ export function parseReviewDecision(output: string): "PASS" | "FAIL" | undefined
   return line.toUpperCase().endsWith("PASS") ? ("PASS" as const) : ("FAIL" as const)
 }
 
+export function parseChangedFiles(output: string) {
+  return [
+    ...new Set(
+      output
+        .split("\0")
+        .filter(Boolean)
+        .map((item) => (/^[ MADRCU?!]{2} /.test(item) ? item.slice(3) : item))
+        .map((item) => item.replaceAll("\\", "/")),
+    ),
+  ]
+}
+
 function taskError(metadata: unknown) {
   if (typeof metadata !== "object" || metadata === null || !("error" in metadata)) return undefined
   return typeof metadata.error === "string" && metadata.error.trim() ? metadata.error : undefined
@@ -542,7 +660,11 @@ function concise(output: string) {
   return text.length > 2_000 ? text.slice(-2_000) : text
 }
 
-function unresolvedRisks(state: TaskRouter.State, reviewerOutputs: string[]) {
+export function unresolvedRisks(
+  state: TaskRouter.State,
+  reviewerOutputs: string[],
+  scopedChanges: { status: "detected" | "none" | "unknown"; files: string[] },
+) {
   return [
     ...(state.status === "needs_validation" ? ["Deterministic validation is unavailable."] : []),
     ...(state.review.status === "unavailable"
@@ -552,5 +674,8 @@ function unresolvedRisks(state: TaskRouter.State, reviewerOutputs: string[]) {
       ? ["Reviewer did not return an explicit DECISION: PASS or DECISION: FAIL line."]
       : []),
     ...(state.status === "blocked" ? [`Workflow blocked: ${state.transition_reason ?? "unknown reason"}.`] : []),
+    ...(state.transition_reason === "max_cost_reached" && scopedChanges.status === "detected"
+      ? ["Scoped files are modified after the author session, but the cost budget was reached before validation."]
+      : []),
   ]
 }

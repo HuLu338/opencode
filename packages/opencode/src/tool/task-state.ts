@@ -172,6 +172,7 @@ export const TaskStateTool = Tool.define<
             const cost = costMetadata({
               tokens: usageTokens,
               sessionCost: session.cost,
+              billingMode: cfg.cost_aware?.billing_mode,
               configured: pricing,
               provider: catalog?.cost,
             })

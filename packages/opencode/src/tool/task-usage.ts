@@ -9,9 +9,17 @@ type Tokens = Pick<
 export function costMetadata(input: {
   tokens: Tokens
   sessionCost?: number
+  billingMode?: TaskRouter.BillingMode
   configured?: TaskRouter.ModelPricing
   provider?: Provider.Model["cost"]
 }) {
+  if (input.billingMode === "subscription") {
+    return {
+      estimated_cost_usd: 0,
+      cost_status: "estimated" as const,
+      cost_source: "subscription" as const,
+    }
+  }
   if (input.configured) {
     return {
       estimated_cost_usd: TaskRouter.estimateCost(input.tokens, input.configured),

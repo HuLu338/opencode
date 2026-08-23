@@ -121,6 +121,9 @@ export const ModelPricing = Schema.Struct({
 })
 export type ModelPricing = typeof ModelPricing.Type
 
+export const BillingMode = Schema.Literals(["provider", "subscription"])
+export type BillingMode = typeof BillingMode.Type
+
 export const SandboxConfig = Schema.Struct({
   enabled: Schema.optional(Schema.Boolean),
   image: Schema.optional(Schema.String),
@@ -133,6 +136,7 @@ export type SandboxConfig = typeof SandboxConfig.Type
 
 export const CostAwareConfig = Schema.Struct({
   ...PolicyConfig.fields,
+  billing_mode: Schema.optional(BillingMode),
   model_pools: Schema.optional(ModelPools),
   pricing_usd_per_million: Schema.optional(Schema.Record(Schema.String, ModelPricing)),
   sandbox: Schema.optional(SandboxConfig),
@@ -163,7 +167,7 @@ const CurrencyAmount = Schema.Finite.check(Schema.isGreaterThanOrEqualTo(0))
 export const CostStatus = Schema.Literals(["estimated", "unavailable"])
 export type CostStatus = typeof CostStatus.Type
 
-export const CostSource = Schema.Literals(["configured", "provider", "unavailable"])
+export const CostSource = Schema.Literals(["configured", "provider", "subscription", "unavailable"])
 export type CostSource = typeof CostSource.Type
 
 export const SessionUsage = Schema.Struct({

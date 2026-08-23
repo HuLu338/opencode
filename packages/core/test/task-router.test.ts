@@ -15,6 +15,13 @@ const baseline: TaskRouter.Input = {
 }
 
 describe("TaskRouter.route", () => {
+  test("decodes provider-neutral billing modes", () => {
+    expect(Schema.decodeUnknownSync(TaskRouter.CostAwareConfig)({ billing_mode: "subscription" })).toEqual({
+      billing_mode: "subscription",
+    })
+    expect(() => Schema.decodeUnknownSync(TaskRouter.CostAwareConfig)({ billing_mode: "unknown" })).toThrow()
+  })
+
   test.each([
     {
       name: "sends explicit reviews to the reviewer",

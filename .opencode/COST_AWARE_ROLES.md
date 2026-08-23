@@ -62,6 +62,9 @@ The Phase 3 retry and escalation policy is configured in `.opencode/opencode.jso
 
 ```jsonc
 "cost_aware": {
+  // Fixed account subscription: model calls have known zero marginal API cost.
+  // Change to "provider" when using metered API credentials.
+  "billing_mode": "subscription",
   "max_attempts": 3,
   "max_escalations": 1,
   "max_cost_usd": 5,
@@ -72,14 +75,6 @@ The Phase 3 retry and escalation policy is configured in `.opencode/opencode.jso
     "cheap-coder": ["openai/gpt-5.4-mini", "openai/gpt-5.4-mini-fast"],
     "strong-coder": ["openai/gpt-5.5", "openai/gpt-5.6-terra"],
     "reviewer": ["openai/gpt-5.6-luna", "openai/gpt-5.4"]
-  },
-  "pricing_usd_per_million": {
-    "openai/gpt-5.4-mini": { "input": 0, "output": 0 },
-    "openai/gpt-5.4-mini-fast": { "input": 0, "output": 0 },
-    "openai/gpt-5.4": { "input": 0, "output": 0 },
-    "openai/gpt-5.5": { "input": 0, "output": 0 },
-    "openai/gpt-5.6-luna": { "input": 0, "output": 0 },
-    "openai/gpt-5.6-terra": { "input": 0, "output": 0 }
   },
   "sandbox": {
     "enabled": true,
@@ -96,13 +91,33 @@ The Phase 3 retry and escalation policy is configured in `.opencode/opencode.jso
 
 Each role has an ordered, bounded model pool. Authentication, rate-limit, quota, unavailable-model, timeout, network, provider, and compatible invalid-request failures are recorded as infrastructure failures and move to the next model without consuming a code-validation attempt. An unknown model failure stops the workflow instead of hiding it, and exhausting a pool is a blocked result. Implementation retries and role escalation remain driven only by deterministic validation or Reviewer findings.
 
-After each delegated role finishes or fails, OpenCode reads the child session's saved model, provider, input/output/reasoning/cache token totals, and estimated USD cost. The task summary groups this data by role/provider/model and totals it without double-counting a resumed child session. Cost records identify whether pricing came from explicit `pricing_usd_per_million` configuration, non-zero provider metadata, or was unavailable. Because OpenCode's normalized provider catalog cannot distinguish a genuinely free model from missing prices when every rate is zero, intentional zero-cost models must be listed explicitly. Summaries distinguish `estimated`, `partial`, and `unavailable` cost coverage. When `max_cost_usd` is configured, missing pricing blocks further model calls because the cap cannot be proven; remove the cap to continue tracking with an explicit unavailable-cost warning. `max_cost_usd` is an assumed per-task budget of $5 for this local setup.
+After each delegated role finishes or fails, OpenCode reads the child session's saved model, provider, input/output/reasoning/cache token totals, and estimated USD cost. The task summary groups this data by role/provider/model and totals it without double-counting a resumed child session.
+
+`billing_mode` makes the charging assumption explicit and remains provider-neutral:
+
+- `subscription` is for a fixed-price account subscription. Calls are recorded as known zero marginal API cost with source `subscription`; account quotas still apply.
+- `provider` is for metered API credentials. OpenCode uses the actual non-zero provider catalog/session price with source `provider`. Optional `pricing_usd_per_million` entries may override a model or supply a price absent from the provider catalog, with source `configured`.
+
+Do not copy a vendor price table into the repository unless an override is genuinely required; provider pricing changes over time. Summaries distinguish `estimated`, `partial`, and `unavailable` cost coverage. When `max_cost_usd` is configured in `provider` mode, missing pricing blocks further model calls because the cap cannot be proven; remove the cap to continue tracking with an explicit unavailable-cost warning. `max_cost_usd` is an assumed per-task budget of $5 for this local setup.
+
+## Task history and cost reports
+
+The report command reads local `.opencode/task-state/*.json` files only. It does not call an LLM or consume model tokens:
+
+```text
+opencode cost
+opencode cost --json
+opencode cost --status completed --limit 10
+opencode cost --task PHASE7-SANDBOX-001
+```
+
+The report includes status history, attempts, escalations, review cycles, token totals, estimated cost coverage and sources, configured budget outcomes, and grouped role/provider/model usage. `--json` provides the complete machine-readable history for later analysis.
 
 The implementation and reviewer bindings should use different model identities where possible. Phase 5 enforces this before review: it compares the actual final author provider/model saved by OpenCode with the Reviewer role's configured provider/model, and refuses to claim independent review when either identity is unavailable or both are the same. Review results, reviewer model identity, and unavailable-review reasons are retained in the local task state. A reviewer `PASS` completes the task; `FAIL` returns the task to a bounded coding repair loop.
 
 ## Current boundary
 
-The current implementation provides manually invoked roles, tested per-role model bindings, bounded per-role model pools, infrastructure-failure fallback, automatic model-independent review through `/orchestrate`, deterministic task routing, persisted validation and review state, validation-driven retries, bounded Cheap Coder escalation, truthful task-budget status, and task-level model/token/cost summaries. It does not yet include parallel specialist worktrees or distributed workers.
+The current implementation provides manually invoked roles, tested per-role model bindings, bounded per-role model pools, infrastructure-failure fallback, automatic model-independent review through `/orchestrate`, deterministic task routing, persisted validation and review state, validation-driven retries, bounded Cheap Coder escalation, explicit subscription/provider billing semantics, truthful task-budget status, task-level model/token/cost summaries, and repository-wide task history/cost reports. It does not yet include parallel specialist worktrees or distributed workers.
 
 ## Phase 5 验收记录
 
