@@ -138,7 +138,7 @@ Runtime identities, token usage, review history, retries, escalation counts, and
 5. 恢复命令可继续任务。
 6. 模型、Token、重试与成本信息可见。
 
-`PHASE6-UX-001` 已通过全新 CLI 进程完成上述编排闭环：确定性验证通过，作者为 `openai/gpt-5.4-mini`，独立 Reviewer 为 `openai/gpt-5.6-luna`，Reviewer 明确 `PASS`，无重试或升级。打包版桌面窗口在本机仍受 Electron GPU 子进程 `0xC0000135` 启动错误影响；这是桌面运行环境风险，不改变该编排状态记录。
+`PHASE6-UX-001` 已通过全新 CLI 进程完成上述编排闭环：确定性验证通过，作者为 `openai/gpt-5.4-mini`，独立 Reviewer 为 `openai/gpt-5.6-luna`，Reviewer 明确 `PASS`，无重试或升级。最终发布验收安装并重启了版本 `0.0.0-cost-aware-routing-202608231213`；会话恢复正常，Electron GPU 子进程保持运行，最近一次运行没有产生 Crashpad 报告或 Windows 应用错误。早期观察到的 GPU 子进程 `0xC0000135` 错误未在最终安装版中复现。
 
 ## 项目七：本地安全沙箱
 
@@ -155,3 +155,7 @@ docker build -f packages/opencode/sandbox/Dockerfile -t opencode-cost-aware-sand
 ## Phase 7 Docker 运行验收
 
 `PHASE7-SANDBOX-001` 的确定性验证在 `executor=docker`、`network=none`、仓库只读挂载下通过。
+
+## 最终发布验收
+
+`RELEASE-SMOKE-001` 由安装后的桌面版执行完成：Cheap Coder 使用 `openai/gpt-5.4-mini`，Docker 沙箱确定性验证通过，独立 Reviewer 使用 `openai/gpt-5.6-luna` 并明确返回 `PASS`。两次模型调用均记录为 `cost_source: subscription`，无重试、升级、模型失败或未解决风险。桌面应用正常关闭并重启后，会话和验收结果保持可见。
